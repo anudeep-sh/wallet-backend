@@ -21,7 +21,7 @@ import type {
   UpdateLimitsBody,
 } from "./users.types";
 
-const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
+const FRONTEND_URL = process.env.FRONTEND_URL || "https://wallet-frontend-61566002034.europe-west1.run.app";
 /** Invitation links expire after 72 hours */
 const INVITE_EXPIRY_HOURS = 72;
 
