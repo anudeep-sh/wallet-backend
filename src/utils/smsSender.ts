@@ -4,7 +4,7 @@
  */
 
 const TWILIO_ACCOUNT_SID = "ACbd885ef22e91e37199add8c2a870af4b";
-const TWILIO_AUTH_TOKEN = "PASTE_YOUR_REAL_AUTH_TOKEN_HERE";
+const TWILIO_AUTH_TOKEN = "4cfdeb0062186eacf114949679e3452d";
 const TWILIO_FROM_NUMBER = "+19893680678";
 
 /**
@@ -17,7 +17,7 @@ export const sendSms = async (
   phoneNumber: string,
   message: string,
 ): Promise<void> => {
-  const url = `https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}/Messages.json`;
+  const url = `https://api.twilio.com/2010-04-01/Accounts/ACbd885ef22e91e37199add8c2a870af4b/Messages.json`;
 
   const params = new URLSearchParams({
     To: phoneNumber,
@@ -31,7 +31,7 @@ export const sendSms = async (
       "Content-Type": "application/x-www-form-urlencoded",
       Authorization:
         "Basic " +
-        Buffer.from(`${TWILIO_ACCOUNT_SID}:4cfdeb0062186eacf114949679e3452d`).toString(
+        Buffer.from(`ACbd885ef22e91e37199add8c2a870af4b:4cfdeb0062186eacf114949679e3452d`).toString(
           "base64",
         ),
     },
