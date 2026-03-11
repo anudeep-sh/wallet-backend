@@ -1,0 +1,995 @@
+{
+  "info": {
+    "name": "Wallet System API",
+    "description": "Full API collection for the hierarchical wallet system.\n\nSwitch between LOCAL and HOSTED environments — all requests use {{baseUrl}}.\n\nLogin flow auto-saves accessToken and refreshToken to environment variables.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }]
+  },
+  "variable": [],
+  "item": [
+    {
+      "name": "Auth",
+      "description": "OTP-based login, MPIN verification, token refresh, logout",
+      "item": [
+        {
+          "name": "1. Request OTP (email)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/wallet/auth/request-otp",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "wallet", "auth", "request-otp"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"identifier\": \"{{adminEmail}}\",\n  \"channel\": \"email\"\n}"
+            }
+          }
+        },
+        {
+          "name": "2. Request OTP (phone)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/wallet/auth/request-otp",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "wallet", "auth", "request-otp"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"identifier\": \"+919999999999\",\n  \"channel\": \"sms\"\n}"
+            }
+          }
+        },
+        {
+          "name": "3. Verify OTP ✅ (saves tokens)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  var json = pm.response.json();",
+                  "  pm.environment.set('accessToken', json.accessToken);",
+                  "  pm.environment.set('refreshToken', json.refreshToken);",
+                  "  pm.environment.set('userId', json.user.id);",
+                  "  pm.test('Tokens saved to env', function() {",
+                  "    pm.expect(json.accessToken).to.be.a('string');",
+                  "  });",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/wallet/auth/verify-otp",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "wallet", "auth", "verify-otp"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"identifier\": \"{{adminEmail}}\",\n  \"otp\": \"PASTE_OTP_HERE\"\n}"
+            }
+          }
+        },
+        {
+          "name": "4. Verify MPIN",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{accessToken}}", "type": "string" }
+              ]
+            },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/wallet/auth/verify-mpin",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "wallet", "auth", "verify-mpin"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mpin\": \"{{adminMpin}}\"\n}"
+            }
+          }
+        },
+        {
+          "name": "5. Refresh Token ✅ (saves new tokens)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  var json = pm.response.json();",
+                  "  pm.environment.set('accessToken', json.accessToken);",
+                  "  pm.environment.set('refreshToken', json.refreshToken);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/wallet/auth/refresh-token",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "wallet", "auth", "refresh-token"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}"
+            }
+          }
+        },
+        {
+          "name": "6. Logout",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{accessToken}}", "type": "string" }
+              ]
+            },
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/wallet/auth/logout",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "wallet", "auth", "logout"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Users",
+      "description": "Invite, register, profile, downline management",
+      "item": [
+        {
+          "name": "1. Invite User ✅ (saves inviteToken)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "  var json = pm.response.json();",
+                  "  pm.environment.set('invitationId', json.invitationId);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{accessToken}}", "type": "string" }
+              ]
+            },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/wallet/users/invite",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "wallet", "users", "invite"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"roleId\": 2,\n  \"firstName\": \"John\",\n  \"lastName\": \"Doe\",\n  \"email\": \"john.doe@example.com\",\n  \"mobileNumber\": \"+919876543210\",\n  \"gender\": \"male\",\n  \"dateOfBirth\": \"1990-05-15\",\n  \"address1\": \"123 Main Street\",\n  \"address2\": \"Apt 4B\",\n  \"city\": \"Hyderabad\",\n  \"state\": \"Telangana\",\n  \"pincode\": \"500001\",\n  \"panCardNumber\": \"ABCDE1234F\",\n  \"aadharCardNumber\": \"123456789012\",\n  \"nameOnAadhar\": \"John Doe\",\n  \"bankAccountNumber\": \"1234567890123456\",\n  \"ifscCode\": \"SBIN0001234\",\n  \"depositLimit\": 500000,\n  \"withdrawDailyLimit\": 100000,\n  \"fileUrls\": []\n}"
+            }
+          }
+        },
+        {
+          "name": "2. Get Invite Details (by token)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/wallet/users/invite/{{inviteToken}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "wallet", "users", "invite", "{{inviteToken}}"]
+            }
+          }
+        },
+        {
+          "name": "3. Register (accept invite)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/wallet/users/register",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "wallet", "users", "register"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"{{inviteToken}}\",\n  \"password\": \"SecurePass@123\",\n  \"mpin\": \"654321\"\n}"
+            }
+          }
+        },
+        {
+          "name": "4. Get My Profile",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{accessToken}}", "type": "string" }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/wallet/users/me",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "wallet", "users", "me"]
+            }
+          }
+        },
+        {
+          "name": "5. Update My Profile",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{accessToken}}", "type": "string" }
+              ]
+            },
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/wallet/users/me",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "wallet", "users", "me"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"city\": \"Mumbai\",\n  \"state\": \"Maharashtra\"\n}"
+            }
+          }
+        },
+        {
+          "name": "6. Set / Change MPIN",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{accessToken}}", "type": "string" }
+              ]
+            },
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/wallet/users/me/mpin",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "wallet", "users", "me", "mpin"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"currentMpin\": \"123456\",\n  \"newMpin\": \"654321\"\n}"
+            }
+          }
+        },
+        {
+          "name": "7. Get Downline",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{accessToken}}", "type": "string" }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/wallet/users/downline?page=1&limit=50",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "wallet", "users", "downline"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "50" },
+                { "key": "roleId", "value": "", "disabled": true }
+              ]
+            }
+          }
+        },
+        {
+          "name": "8. Get Downline User by ID",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{accessToken}}", "type": "string" }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/wallet/users/{{userId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "wallet", "users", "{{userId}}"]
+            }
+          }
+        },
+        {
+          "name": "9. Activate / Deactivate User",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{accessToken}}", "type": "string" }
+              ]
+            },
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/wallet/users/{{userId}}/status",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "wallet", "users", "{{userId}}", "status"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"isActive\": false\n}"
+            }
+          }
+        },
+        {
+          "name": "10. Update User Limits",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{accessToken}}", "type": "string" }
+              ]
+            },
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/wallet/users/{{userId}}/limits",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "wallet", "users", "{{userId}}", "limits"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"depositLimit\": 1000000,\n  \"withdrawDailyLimit\": 200000\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Wallet",
+      "description": "Balance, transactions, daily summary",
+      "item": [
+        {
+          "name": "1. Get Balance",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{accessToken}}", "type": "string" }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/wallet/wallet",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "wallet", "wallet"]
+            }
+          }
+        },
+        {
+          "name": "2. Get Transactions",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{accessToken}}", "type": "string" }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/wallet/wallet/transactions?page=1&limit=50",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "wallet", "wallet", "transactions"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "50" },
+                { "key": "type", "value": "credit", "disabled": true },
+                {
+                  "key": "referenceType",
+                  "value": "commission",
+                  "disabled": true
+                },
+                { "key": "fromDate", "value": "2026-01-01", "disabled": true },
+                { "key": "toDate", "value": "2026-12-31", "disabled": true }
+              ]
+            }
+          }
+        },
+        {
+          "name": "3. Get Summary",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{accessToken}}", "type": "string" }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/wallet/wallet/summary",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "wallet", "wallet", "summary"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Payins (Credit Card Swipe)",
+      "description": "Initiate Razorpay payment, verify, webhook",
+      "item": [
+        {
+          "name": "1. Initiate Payin ✅ (saves payinId)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "  var json = pm.response.json();",
+                  "  pm.environment.set('payinId', json.payinId);",
+                  "  pm.environment.set('razorpayOrderId', json.orderId);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{accessToken}}", "type": "string" }
+              ]
+            },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/wallet/payins/initiate",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "wallet", "payins", "initiate"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": 10000\n}"
+            }
+          }
+        },
+        {
+          "name": "2. Verify Payin (after Razorpay checkout)",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{accessToken}}", "type": "string" }
+              ]
+            },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/wallet/payins/verify",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "wallet", "payins", "verify"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"razorpayOrderId\": \"{{razorpayOrderId}}\",\n  \"razorpayPaymentId\": \"pay_XXXXXXXXXXXX\",\n  \"razorpaySignature\": \"PASTE_SIGNATURE_HERE\"\n}"
+            }
+          }
+        },
+        {
+          "name": "3. Razorpay Webhook (no auth)",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              {
+                "key": "x-razorpay-signature",
+                "value": "PASTE_WEBHOOK_SIGNATURE"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/wallet/payins/webhook",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "wallet", "payins", "webhook"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"event\": \"payment.captured\",\n  \"payload\": {\n    \"payment\": {\n      \"entity\": {\n        \"id\": \"pay_XXXXXXXXXXXX\",\n        \"order_id\": \"{{razorpayOrderId}}\",\n        \"amount\": 1000000,\n        \"status\": \"captured\"\n      }\n    }\n  }\n}"
+            }
+          }
+        },
+        {
+          "name": "4. List My Payins",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{accessToken}}", "type": "string" }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/wallet/payins?page=1&limit=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "wallet", "payins"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "20" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "5. Get Payin Details (with commission breakdown)",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{accessToken}}", "type": "string" }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/wallet/payins/{{payinId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "wallet", "payins", "{{payinId}}"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Payouts (Withdrawals)",
+      "description": "Request withdrawal, approve, reject",
+      "item": [
+        {
+          "name": "1. Request Payout ✅ (saves payoutId)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "  var json = pm.response.json();",
+                  "  pm.environment.set('payoutId', json.payoutId);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{accessToken}}", "type": "string" }
+              ]
+            },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/wallet/payouts/request",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "wallet", "payouts", "request"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": 5000,\n  \"bankAccountNumber\": \"1234567890123456\",\n  \"ifscCode\": \"SBIN0001234\",\n  \"accountHolderName\": \"John Doe\"\n}"
+            }
+          }
+        },
+        {
+          "name": "2. List My Payouts",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{accessToken}}", "type": "string" }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/wallet/payouts?page=1&limit=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "wallet", "payouts"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "20" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "3. Get Payout Details",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{accessToken}}", "type": "string" }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/wallet/payouts/{{payoutId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "wallet", "payouts", "{{payoutId}}"]
+            }
+          }
+        },
+        {
+          "name": "4. Approve Payout (admin/parent)",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{accessToken}}", "type": "string" }
+              ]
+            },
+            "method": "PUT",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/wallet/payouts/{{payoutId}}/approve",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "wallet", "payouts", "{{payoutId}}", "approve"]
+            }
+          }
+        },
+        {
+          "name": "5. Reject Payout (admin/parent)",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{accessToken}}", "type": "string" }
+              ]
+            },
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/wallet/payouts/{{payoutId}}/reject",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "wallet", "payouts", "{{payoutId}}", "reject"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"Insufficient KYC documents\"\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Commissions",
+      "description": "Default config, per-user overrides, earnings",
+      "item": [
+        {
+          "name": "1. Get Commission Config",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{accessToken}}", "type": "string" }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/wallet/commissions/config",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "wallet", "commissions", "config"]
+            }
+          }
+        },
+        {
+          "name": "2. Set Commission Config (admin only)",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{accessToken}}", "type": "string" }
+              ]
+            },
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/wallet/commissions/config",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "wallet", "commissions", "config"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"rates\": [\n    { \"transactionRoleLevel\": 9, \"beneficiaryRoleLevel\": 8, \"percentage\": 0.5 },\n    { \"transactionRoleLevel\": 9, \"beneficiaryRoleLevel\": 1, \"percentage\": 1.0 }\n  ]\n}"
+            }
+          }
+        },
+        {
+          "name": "3. Get My Overrides",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{accessToken}}", "type": "string" }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/wallet/commissions/overrides",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "wallet", "commissions", "overrides"]
+            }
+          }
+        },
+        {
+          "name": "4. Set Override for User",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{accessToken}}", "type": "string" }
+              ]
+            },
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/wallet/commissions/overrides/{{userId}}",
+              "host": ["{{baseUrl}}"],
+              "path": [
+                "api",
+                "wallet",
+                "commissions",
+                "overrides",
+                "{{userId}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"beneficiaryUserId\": \"PASTE_BENEFICIARY_USER_ID\",\n  \"percentage\": 1.5\n}"
+            }
+          }
+        },
+        {
+          "name": "5. Delete Override",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{accessToken}}", "type": "string" }
+              ]
+            },
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/wallet/commissions/overrides/{{userId}}?beneficiaryUserId=PASTE_ID",
+              "host": ["{{baseUrl}}"],
+              "path": [
+                "api",
+                "wallet",
+                "commissions",
+                "overrides",
+                "{{userId}}"
+              ],
+              "query": [{ "key": "beneficiaryUserId", "value": "PASTE_ID" }]
+            }
+          }
+        },
+        {
+          "name": "6. Get My Earnings",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{accessToken}}", "type": "string" }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/wallet/commissions/earnings?page=1&limit=50",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "wallet", "commissions", "earnings"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "50" }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Admin",
+      "description": "Dashboard, system-wide user/transaction/payin/payout listings (ADMIN only)",
+      "item": [
+        {
+          "name": "1. Dashboard",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{accessToken}}", "type": "string" }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/wallet/admin/dashboard",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "wallet", "admin", "dashboard"]
+            }
+          }
+        },
+        {
+          "name": "2. List All Users",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{accessToken}}", "type": "string" }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/wallet/admin/users?page=1&limit=50",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "wallet", "admin", "users"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "50" },
+                { "key": "roleId", "value": "9", "disabled": true },
+                { "key": "status", "value": "active", "disabled": true },
+                { "key": "search", "value": "john", "disabled": true }
+              ]
+            }
+          }
+        },
+        {
+          "name": "3. List All Transactions",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{accessToken}}", "type": "string" }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/wallet/admin/transactions?page=1&limit=50",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "wallet", "admin", "transactions"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "50" },
+                { "key": "fromDate", "value": "2026-01-01", "disabled": true },
+                { "key": "toDate", "value": "2026-12-31", "disabled": true }
+              ]
+            }
+          }
+        },
+        {
+          "name": "4. List All Payins",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{accessToken}}", "type": "string" }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/wallet/admin/payins?page=1&limit=50",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "wallet", "admin", "payins"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "50" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "5. List All Payouts (approval queue)",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                { "key": "token", "value": "{{accessToken}}", "type": "string" }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/wallet/admin/payouts?page=1&limit=50&status=pending",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "wallet", "admin", "payouts"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "50" },
+                { "key": "status", "value": "pending" }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Health & Info",
+      "item": [
+        {
+          "name": "Root Info",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/",
+              "host": ["{{baseUrl}}"],
+              "path": [""]
+            }
+          }
+        },
+        {
+          "name": "Health Check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": ["{{baseUrl}}"],
+              "path": ["health"]
+            }
+          }
+        },
+        {
+          "name": "Prometheus Metrics",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/metrics",
+              "host": ["{{baseUrl}}"],
+              "path": ["metrics"]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
