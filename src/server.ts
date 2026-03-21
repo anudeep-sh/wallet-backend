@@ -27,6 +27,7 @@ import { payinRoutes } from './modules/payin/payin.routes';
 import { payoutRoutes } from './modules/payout/payout.routes';
 import { commissionRoutes } from './modules/commission/commission.routes';
 import { adminRoutes } from './modules/admin/admin.routes';
+import { startPolling } from './modules/slpe/slpe-poller';
 
 const port = process.env.PORT || 8080;
 
@@ -228,6 +229,7 @@ app.use(payoutRoutes.routes()).use(payoutRoutes.allowedMethods());
 app.use(commissionRoutes.routes()).use(commissionRoutes.allowedMethods());
 app.use(adminRoutes.routes()).use(adminRoutes.allowedMethods());
 
-app.listen(port);
-
-console.log(`Wallet system server listening on port ${port}`);
+app.listen(port, () => {
+  console.log(`Wallet system server listening on port ${port}`);
+  startPolling();
+});

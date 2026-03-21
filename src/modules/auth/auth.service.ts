@@ -74,7 +74,7 @@ export const requestOtp = async (identifier: string, channelHint?: 'email' | 'sm
     .count('id as cnt')
     .first();
 
-  if (recentCount && Number(recentCount.cnt) >= 50) {
+  if (recentCount && Number(recentCount.cnt) >= 5) {
     throw new TooManyRequestsError('OTP limit reached — try again later');
   }
 

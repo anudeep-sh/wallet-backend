@@ -61,13 +61,11 @@ export const setConfig = async (
         .first();
 
       if (existing) {
-        await trx("w_commission_configs")
-          .where({ id: existing.id })
-          .update({
-            percentage: r.percentage,
-            set_by: adminId,
-            updated_at: trx.fn.now(),
-          });
+        await trx("w_commission_configs").where({ id: existing.id }).update({
+          percentage: r.percentage,
+          set_by: adminId,
+          updated_at: trx.fn.now(),
+        });
       } else {
         await trx("w_commission_configs").insert({
           transaction_role_level: r.transactionRoleLevel,
@@ -164,6 +162,101 @@ export const getEarnings = async (userId: string, page = 1, limit = 50) => {
     .count("id as total");
 
   return { earnings: rows, pagination: { page, limit, total: Number(total) } };
+};
+
+/* ------------------------------------------------------------------ */
+/*  ADMIN: all overrides (with names)                                  */
+/* ------------------------------------------------------------------ */
+
+export const getAllOverrides = async () => {
+  return walletDb("w_user_commission_overrides as o")
+    .leftJoin("w_users as swiper", "o.user_id", "swiper.id")
+    .leftJoin("w_roles as sr", "swiper.role_id", "sr.id")
+    .leftJoin("w_users as ben", "o.beneficiary_user_id", "ben.id")
+    .leftJoin("w_roles as br", "ben.role_id", "br.id")
+    .select(
+      "o.*",
+      "swiper.first_name as swiper_first_name",
+      "swiper.last_name as swiper_last_name",
+      "swiper.email as swiper_email",
+      "sr.name as swiper_role",
+      "ben.first_name as beneficiary_first_name",
+      "ben.last_name as beneficiary_last_name",
+      "ben.email as beneficiary_email",
+      "br.name as beneficiary_role",
+    )
+    .orderBy("o.created_at", "desc");
+};
+
+/* ------------------------------------------------------------------ */
+/*  ADMIN: commission chain for a specific user (swiper → ancestors)   */
+/* ------------------------------------------------------------------ */
+
+export const getUserCommissionChain = async (userId: string) => {
+  const user = await walletDb("w_users")
+    .leftJoin("w_roles", "w_users.role_id", "w_roles.id")
+    .where("w_users.id", userId)
+    .select("w_users.*", "w_roles.name as role_name")
+    .first();
+
+  if (!user) return { user: null, chain: [] };
+
+  const chain: any[] = [];
+  let currentId: string | null = user.parent_id;
+
+  while (currentId) {
+    const ancestor = await walletDb("w_users")
+      .leftJoin("w_roles", "w_users.role_id", "w_roles.id")
+      .where("w_users.id", currentId)
+      .select(
+        "w_users.id",
+        "w_users.first_name",
+        "w_users.last_name",
+        "w_users.email",
+        "w_users.role_id",
+        "w_users.parent_id",
+        "w_roles.name as role_name",
+      )
+      .first();
+    if (!ancestor) break;
+
+    const defaultConfig = await walletDb("w_commission_configs")
+      .where({
+        transaction_role_level: user.role_id,
+        beneficiary_role_level: ancestor.role_id,
+      })
+      .first();
+
+    const override = await walletDb("w_user_commission_overrides")
+      .where({ user_id: userId, beneficiary_user_id: ancestor.id })
+      .first();
+
+    chain.push({
+      userId: ancestor.id,
+      firstName: ancestor.first_name,
+      lastName: ancestor.last_name,
+      email: ancestor.email,
+      roleLevel: ancestor.role_id,
+      roleName: ancestor.role_name,
+      defaultRate: defaultConfig ? Number(defaultConfig.percentage) : 0,
+      overrideRate: override ? Number(override.percentage) : null,
+      overrideId: override?.id || null,
+    });
+
+    currentId = ancestor.parent_id;
+  }
+
+  return {
+    user: {
+      id: user.id,
+      firstName: user.first_name,
+      lastName: user.last_name,
+      email: user.email,
+      roleLevel: user.role_id,
+      roleName: user.role_name,
+    },
+    chain,
+  };
 };
 
 /* ------------------------------------------------------------------ */

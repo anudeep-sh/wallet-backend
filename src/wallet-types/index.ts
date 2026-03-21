@@ -17,65 +17,66 @@ export enum RoleLevel {
 
 /** Human-readable role names keyed by level */
 export const ROLE_NAMES: Record<number, string> = {
-  [RoleLevel.ADMIN]: 'ADMIN',
-  [RoleLevel.ADMIN_PARTNER]: 'ADMIN_PARTNER',
-  [RoleLevel.WHITE_LABEL]: 'WHITE_LABEL',
-  [RoleLevel.STATE_HEAD]: 'STATE_HEAD',
-  [RoleLevel.SUPER_DISTRIBUTOR]: 'SUPER_DISTRIBUTOR',
-  [RoleLevel.MASTER_DISTRIBUTOR]: 'MASTER_DISTRIBUTOR',
-  [RoleLevel.DISTRIBUTOR]: 'DISTRIBUTOR',
-  [RoleLevel.RETAILER]: 'RETAILER',
-  [RoleLevel.SHOPKEEPER]: 'SHOPKEEPER',
+  [RoleLevel.ADMIN]: "ADMIN",
+  [RoleLevel.ADMIN_PARTNER]: "ADMIN_PARTNER",
+  [RoleLevel.WHITE_LABEL]: "WHITE_LABEL",
+  [RoleLevel.STATE_HEAD]: "STATE_HEAD",
+  [RoleLevel.SUPER_DISTRIBUTOR]: "SUPER_DISTRIBUTOR",
+  [RoleLevel.MASTER_DISTRIBUTOR]: "MASTER_DISTRIBUTOR",
+  [RoleLevel.DISTRIBUTOR]: "DISTRIBUTOR",
+  [RoleLevel.RETAILER]: "RETAILER",
+  [RoleLevel.SHOPKEEPER]: "SHOPKEEPER",
 };
 
 /** Wallet transaction direction */
 export enum TransactionType {
-  CREDIT = 'credit',
-  DEBIT = 'debit',
+  CREDIT = "credit",
+  DEBIT = "debit",
 }
 
 /** What triggered a wallet transaction */
 export enum ReferenceType {
-  PAYIN = 'payin',
-  PAYOUT = 'payout',
-  COMMISSION = 'commission',
-  ADJUSTMENT = 'adjustment',
+  PAYIN = "payin",
+  PAYOUT = "payout",
+  COMMISSION = "commission",
+  ADJUSTMENT = "adjustment",
 }
 
 /** Overall status for transactions, payins, payouts */
 export enum TxnStatus {
-  PENDING = 'pending',
-  PROCESSING = 'processing',
-  SUCCESS = 'success',
-  FAILED = 'failed',
+  PENDING = "pending",
+  PROCESSING = "processing",
+  SUCCESS = "success",
+  FAILED = "failed",
 }
 
 /** Invitation lifecycle */
 export enum InviteStatus {
-  PENDING = 'pending',
-  ACCEPTED = 'accepted',
-  EXPIRED = 'expired',
+  PENDING = "pending",
+  ACCEPTED = "accepted",
+  EXPIRED = "expired",
 }
 
 /** Payout-specific statuses (superset of TxnStatus) */
 export enum PayoutStatus {
-  PENDING = 'pending',
-  APPROVED = 'approved',
-  PROCESSING = 'processing',
-  COMPLETED = 'completed',
-  REJECTED = 'rejected',
+  PENDING = "pending",
+  APPROVED = "approved",
+  PROCESSING = "processing",
+  COMPLETED = "completed",
+  FAILED = "failed",
+  REJECTED = "rejected",
 }
 
 /** OTP delivery channel */
 export enum OtpType {
-  EMAIL = 'email',
-  SMS = 'sms',
+  EMAIL = "email",
+  SMS = "sms",
 }
 
 /** OTP use-case */
 export enum OtpPurpose {
-  LOGIN = 'login',
-  MPIN_RESET = 'mpin_reset',
+  LOGIN = "login",
+  MPIN_RESET = "mpin_reset",
 }
 
 /* ------------------------------------------------------------------ */
