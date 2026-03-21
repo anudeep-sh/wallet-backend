@@ -23,11 +23,24 @@ import { logger } from "../../utils/logger";
 import { normalizePhoneForSlpe } from "../../utils/phone-normalize";
 
 const POLL_DURATION_MS = 10 * 60 * 1000; // 10 minutes
+/** SLPE requires expiry ≥20 min from *their* clock; they interpret times in IST. */
 const LINK_EXPIRY_MS = 30 * 60 * 1000; // 30 minutes (SLPE minimum: 25 min)
 
-function formatDatetime(d: Date): string {
-  const p = (n: number) => n.toString().padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+/** Format as `YYYY-MM-DD HH:mm:ss` in Asia/Kolkata (IST) — must match SLPE server time. */
+function formatPaymentLinkExpiryForSlpe(d: Date): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).formatToParts(d);
+  const get = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((p) => p.type === type)?.value ?? "00";
+  return `${get("year")}-${get("month")}-${get("day")} ${get("hour")}:${get("minute")}:${get("second")}`;
 }
 
 /* ------------------------------------------------------------------ */
@@ -77,7 +90,7 @@ export const initiatePayin = async (
       call_back_url: slpe.getPayinCallbackUrl(),
       redirection_url: `${slpe.getFrontendBase()}/payins?payinId=${payin.id}`,
       gateway_id: slpe.getPayinGatewayId(),
-      payment_link_expiry: formatDatetime(expiresAt),
+      payment_link_expiry: formatPaymentLinkExpiryForSlpe(expiresAt),
       payment_for: body.paymentFor || "Wallet Top-up",
       customer: {
         name: `${user.first_name} ${user.last_name}`,
