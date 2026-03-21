@@ -8,21 +8,22 @@
  *   4. On completion → mark as completed
  *   5. On failure  → mark as failed, refund wallet
  */
-import walletDb from '../../database/wallet-db';
+import walletDb from "../../database/wallet-db";
 import {
   BadRequestError,
   NotFoundError,
   UnprocessableError,
-} from '../../lib/errors';
+} from "../../lib/errors";
 import {
   TransactionType,
   ReferenceType,
   TxnStatus,
   PayoutStatus,
-} from '../../wallet-types';
-import { slpe } from '../slpe/slpe.service';
-import type { RequestPayoutBody, RejectPayoutBody } from './payout.types';
-import { logger } from '../../utils/logger';
+} from "../../wallet-types";
+import { slpe } from "../slpe/slpe.service";
+import type { RequestPayoutBody, RejectPayoutBody } from "./payout.types";
+import { logger } from "../../utils/logger";
+import { normalizePhoneForSlpe } from "../../utils/phone-normalize";
 
 const POLL_DURATION_MS = 10 * 60 * 1000;
 
@@ -35,15 +36,13 @@ export const requestPayout = async (
   body: RequestPayoutBody,
 ) => {
   if (!body.amount || body.amount <= 0)
-    throw new BadRequestError('Amount must be positive');
+    throw new BadRequestError("Amount must be positive");
 
-  const user = await walletDb('w_users').where({ id: userId }).first();
-  if (!user) throw new NotFoundError('User not found');
+  const user = await walletDb("w_users").where({ id: userId }).first();
+  if (!user) throw new NotFoundError("User not found");
 
-  const wallet = await walletDb('w_wallets')
-    .where({ user_id: userId })
-    .first();
-  if (!wallet) throw new NotFoundError('Wallet not found');
+  const wallet = await walletDb("w_wallets").where({ user_id: userId }).first();
+  if (!wallet) throw new NotFoundError("Wallet not found");
 
   if (Number(wallet.balance) < body.amount) {
     throw new UnprocessableError(
@@ -56,16 +55,16 @@ export const requestPayout = async (
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
 
-    const todayTotal = await walletDb('w_payouts')
+    const todayTotal = await walletDb("w_payouts")
       .where({ user_id: userId })
-      .whereIn('status', [
+      .whereIn("status", [
         PayoutStatus.PENDING,
         PayoutStatus.APPROVED,
         PayoutStatus.PROCESSING,
         PayoutStatus.COMPLETED,
       ])
-      .where('created_at', '>=', todayStart)
-      .sum('amount as total')
+      .where("created_at", ">=", todayStart)
+      .sum("amount as total")
       .first();
 
     const already = Number(todayTotal?.total || 0);
@@ -76,50 +75,49 @@ export const requestPayout = async (
     }
   }
 
-  const [payout] = await walletDb('w_payouts')
+  const [payout] = await walletDb("w_payouts")
     .insert({
       user_id: userId,
       amount: body.amount,
-      bank_account_number:
-        body.bankAccountNumber || user.bank_account_number,
+      bank_account_number: body.bankAccountNumber || user.bank_account_number,
       ifsc_code: body.ifscCode || user.ifsc_code,
       account_holder_name:
         body.accountHolderName || `${user.first_name} ${user.last_name}`,
       status: PayoutStatus.PENDING,
     })
-    .returning('*');
+    .returning("*");
 
-  await walletDb('w_audit_logs').insert({
+  await walletDb("w_audit_logs").insert({
     user_id: userId,
-    action: 'PAYOUT_REQUESTED',
-    entity_type: 'payout',
+    action: "PAYOUT_REQUESTED",
+    entity_type: "payout",
     entity_id: payout.id,
     meta: JSON.stringify({ amount: body.amount }),
   });
 
-  return { message: 'Withdrawal request submitted', payoutId: payout.id };
+  return { message: "Withdrawal request submitted", payoutId: payout.id };
 };
 
 /* ------------------------------------------------------------------ */
 /*  APPROVE PAYOUT (bank validation → debit → SLPE payout)            */
 /* ------------------------------------------------------------------ */
 
-export const approvePayout = async (
-  approverId: string,
-  payoutId: string,
-) => {
-  const payout = await walletDb('w_payouts').where({ id: payoutId }).first();
-  if (!payout) throw new NotFoundError('Payout not found');
+export const approvePayout = async (approverId: string, payoutId: string) => {
+  const payout = await walletDb("w_payouts").where({ id: payoutId }).first();
+  if (!payout) throw new NotFoundError("Payout not found");
   if (payout.status !== PayoutStatus.PENDING) {
     throw new BadRequestError(
       `Cannot approve a payout in '${payout.status}' status`,
     );
   }
 
-  const user = await walletDb('w_users')
-    .where({ id: payout.user_id })
-    .first();
-  if (!user) throw new NotFoundError('User not found');
+  const user = await walletDb("w_users").where({ id: payout.user_id }).first();
+  if (!user) throw new NotFoundError("User not found");
+
+  const phoneForSlpe = normalizePhoneForSlpe(
+    user.mobile_number,
+    "Mobile number",
+  );
 
   /* ---------- Step 1: Validate bank account via SLPE ---------- */
   let bankValidation;
@@ -128,10 +126,10 @@ export const approvePayout = async (
       account_number: payout.bank_account_number,
       ifsc_code: payout.ifsc_code,
       name: payout.account_holder_name,
-      phone: user.mobile_number,
+      phone: phoneForSlpe,
     });
   } catch (err: any) {
-    logger.error('Bank validation failed', {
+    logger.error("Bank validation failed", {
       payoutId,
       error: err.message,
     });
@@ -142,24 +140,24 @@ export const approvePayout = async (
 
   /* ---------- Step 2: Debit wallet inside a transaction ---------- */
   await walletDb.transaction(async (trx) => {
-    const wallet = await trx('w_wallets')
+    const wallet = await trx("w_wallets")
       .where({ user_id: payout.user_id })
       .first();
-    if (!wallet) throw new NotFoundError('Wallet not found');
+    if (!wallet) throw new NotFoundError("Wallet not found");
 
     if (Number(wallet.balance) < Number(payout.amount)) {
-      throw new UnprocessableError('User no longer has sufficient balance');
+      throw new UnprocessableError("User no longer has sufficient balance");
     }
 
     const before = Number(wallet.balance);
     const after = Math.round((before - Number(payout.amount)) * 100) / 100;
 
-    await trx('w_wallets').where({ id: wallet.id }).update({
+    await trx("w_wallets").where({ id: wallet.id }).update({
       balance: after,
       updated_at: trx.fn.now(),
     });
 
-    await trx('w_transactions').insert({
+    await trx("w_transactions").insert({
       wallet_id: wallet.id,
       user_id: payout.user_id,
       type: TransactionType.DEBIT,
@@ -172,24 +170,25 @@ export const approvePayout = async (
       status: TxnStatus.SUCCESS,
     });
 
-    await trx('w_payouts').where({ id: payoutId }).update({
-      status: PayoutStatus.APPROVED,
-      approved_by: approverId,
-      bank_validated: true,
-      bank_validation_response: JSON.stringify(bankValidation),
-      updated_at: trx.fn.now(),
-    });
+    await trx("w_payouts")
+      .where({ id: payoutId })
+      .update({
+        status: PayoutStatus.APPROVED,
+        approved_by: approverId,
+        bank_validated: true,
+        bank_validation_response: JSON.stringify(bankValidation),
+        updated_at: trx.fn.now(),
+      });
   });
 
   /* ---------- Step 3: Create SLPE payout ---------- */
-  const bankName =
-    payout.ifsc_code?.substring(0, 4) || 'Bank';
+  const bankName = payout.ifsc_code?.substring(0, 4) || "Bank";
 
   let slpePayout;
   try {
     slpePayout = await slpe.createPayout({
       amount: Number(payout.amount),
-      mode: 'IMPS',
+      mode: "IMPS",
       call_back_url: slpe.getPayoutCallbackUrl(),
       gateway_id: slpe.getPayoutGatewayId(),
       bank_account: {
@@ -200,14 +199,14 @@ export const approvePayout = async (
       },
     });
   } catch (err: any) {
-    logger.error('SLPE payout creation failed, refunding wallet', {
+    logger.error("SLPE payout creation failed, refunding wallet", {
       payoutId,
       error: err.message,
     });
 
     /* Refund the wallet since SLPE call failed */
     await walletDb.transaction(async (trx) => {
-      const wallet = await trx('w_wallets')
+      const wallet = await trx("w_wallets")
         .where({ user_id: payout.user_id })
         .first();
       if (!wallet) return;
@@ -216,12 +215,12 @@ export const approvePayout = async (
       const refund = Number(payout.amount);
       const after = Math.round((before + refund) * 100) / 100;
 
-      await trx('w_wallets').where({ id: wallet.id }).update({
+      await trx("w_wallets").where({ id: wallet.id }).update({
         balance: after,
         updated_at: trx.fn.now(),
       });
 
-      await trx('w_transactions').insert({
+      await trx("w_transactions").insert({
         wallet_id: wallet.id,
         user_id: payout.user_id,
         type: TransactionType.CREDIT,
@@ -234,11 +233,13 @@ export const approvePayout = async (
         status: TxnStatus.SUCCESS,
       });
 
-      await trx('w_payouts').where({ id: payoutId }).update({
-        status: PayoutStatus.FAILED,
-        gateway_response: JSON.stringify({ error: err.message }),
-        updated_at: trx.fn.now(),
-      });
+      await trx("w_payouts")
+        .where({ id: payoutId })
+        .update({
+          status: PayoutStatus.FAILED,
+          gateway_response: JSON.stringify({ error: err.message }),
+          updated_at: trx.fn.now(),
+        });
     });
 
     throw new UnprocessableError(
@@ -249,19 +250,21 @@ export const approvePayout = async (
   /* ---------- Step 4: Update payout → processing, start polling ---------- */
   const pollUntil = new Date(Date.now() + POLL_DURATION_MS);
 
-  await walletDb('w_payouts').where({ id: payoutId }).update({
-    status: PayoutStatus.PROCESSING,
-    gateway: 'slpe',
-    gateway_txn_id: slpePayout.payout_id,
-    gateway_response: JSON.stringify(slpePayout),
-    poll_until: pollUntil,
-    updated_at: walletDb.fn.now(),
-  });
+  await walletDb("w_payouts")
+    .where({ id: payoutId })
+    .update({
+      status: PayoutStatus.PROCESSING,
+      gateway: "slpe",
+      gateway_txn_id: slpePayout.payout_id,
+      gateway_response: JSON.stringify(slpePayout),
+      poll_until: pollUntil,
+      updated_at: walletDb.fn.now(),
+    });
 
-  await walletDb('w_audit_logs').insert({
+  await walletDb("w_audit_logs").insert({
     user_id: approverId,
-    action: 'PAYOUT_APPROVED',
-    entity_type: 'payout',
+    action: "PAYOUT_APPROVED",
+    entity_type: "payout",
     entity_id: payoutId,
     meta: JSON.stringify({
       amount: payout.amount,
@@ -269,13 +272,13 @@ export const approvePayout = async (
     }),
   });
 
-  logger.info('Payout approved and submitted', {
+  logger.info("Payout approved and submitted", {
     payoutId,
     slpePayoutId: slpePayout.payout_id,
   });
 
   return {
-    message: 'Payout approved and submitted to gateway',
+    message: "Payout approved and submitted to gateway",
     payoutId,
     slpePayoutId: slpePayout.payout_id,
   };
@@ -290,32 +293,32 @@ export const rejectPayout = async (
   payoutId: string,
   body: RejectPayoutBody,
 ) => {
-  if (!body.reason) throw new BadRequestError('Rejection reason is required');
+  if (!body.reason) throw new BadRequestError("Rejection reason is required");
 
-  const payout = await walletDb('w_payouts').where({ id: payoutId }).first();
-  if (!payout) throw new NotFoundError('Payout not found');
+  const payout = await walletDb("w_payouts").where({ id: payoutId }).first();
+  if (!payout) throw new NotFoundError("Payout not found");
   if (payout.status !== PayoutStatus.PENDING) {
     throw new BadRequestError(
       `Cannot reject a payout in '${payout.status}' status`,
     );
   }
 
-  await walletDb('w_payouts').where({ id: payoutId }).update({
+  await walletDb("w_payouts").where({ id: payoutId }).update({
     status: PayoutStatus.REJECTED,
     approved_by: rejecterId,
     rejection_reason: body.reason,
     updated_at: walletDb.fn.now(),
   });
 
-  await walletDb('w_audit_logs').insert({
+  await walletDb("w_audit_logs").insert({
     user_id: rejecterId,
-    action: 'PAYOUT_REJECTED',
-    entity_type: 'payout',
+    action: "PAYOUT_REJECTED",
+    entity_type: "payout",
     entity_id: payoutId,
     meta: JSON.stringify({ reason: body.reason }),
   });
 
-  return { message: 'Payout rejected', payoutId };
+  return { message: "Payout rejected", payoutId };
 };
 
 /* ------------------------------------------------------------------ */
@@ -323,42 +326,43 @@ export const rejectPayout = async (
 /* ------------------------------------------------------------------ */
 
 export const handleSlpePayoutWebhook = async (payload: any) => {
-  logger.info('SLPE payout webhook received');
+  logger.info("SLPE payout webhook received");
 
-  const payoutIdFromGw =
-    payload?.payout_id || payload?.data?.payout_id;
-  if (!payoutIdFromGw) return { status: 'ignored', reason: 'no payout_id' };
+  const payoutIdFromGw = payload?.payout_id || payload?.data?.payout_id;
+  if (!payoutIdFromGw) return { status: "ignored", reason: "no payout_id" };
 
-  const payout = await walletDb('w_payouts')
+  const payout = await walletDb("w_payouts")
     .where({ gateway_txn_id: payoutIdFromGw })
     .first();
   if (!payout || payout.status === PayoutStatus.COMPLETED)
-    return { status: 'ignored' };
+    return { status: "ignored" };
 
   /* Re-verify via SLPE API */
   const statusRes = await slpe.getPayoutStatus(payoutIdFromGw);
-  await walletDb('w_payouts').where({ id: payout.id }).update({
-    last_polled_at: new Date(),
-    gateway_response: JSON.stringify(statusRes),
-    updated_at: walletDb.fn.now(),
-  });
+  await walletDb("w_payouts")
+    .where({ id: payout.id })
+    .update({
+      last_polled_at: new Date(),
+      gateway_response: JSON.stringify(statusRes),
+      updated_at: walletDb.fn.now(),
+    });
 
   const gwStatus = statusRes?.data?.payout_data?.status;
 
-  if (gwStatus === 'processed' || gwStatus === 'completed') {
-    await walletDb('w_payouts').where({ id: payout.id }).update({
+  if (gwStatus === "processed" || gwStatus === "completed") {
+    await walletDb("w_payouts").where({ id: payout.id }).update({
       status: PayoutStatus.COMPLETED,
       updated_at: walletDb.fn.now(),
     });
-    return { status: 'ok' };
+    return { status: "ok" };
   }
 
-  if (gwStatus === 'failed' || gwStatus === 'reversed') {
+  if (gwStatus === "failed" || gwStatus === "reversed") {
     await refundFailedPayout(payout);
-    return { status: 'refunded' };
+    return { status: "refunded" };
   }
 
-  return { status: 'noted', gwStatus };
+  return { status: "noted", gwStatus };
 };
 
 /* ------------------------------------------------------------------ */
@@ -367,12 +371,12 @@ export const handleSlpePayoutWebhook = async (payload: any) => {
 
 export const refundFailedPayout = async (payout: any) => {
   return walletDb.transaction(async (trx) => {
-    await trx('w_payouts').where({ id: payout.id }).update({
+    await trx("w_payouts").where({ id: payout.id }).update({
       status: PayoutStatus.FAILED,
       updated_at: trx.fn.now(),
     });
 
-    const wallet = await trx('w_wallets')
+    const wallet = await trx("w_wallets")
       .where({ user_id: payout.user_id })
       .first();
     if (!wallet) return;
@@ -381,12 +385,12 @@ export const refundFailedPayout = async (payout: any) => {
     const refund = Number(payout.amount);
     const after = Math.round((before + refund) * 100) / 100;
 
-    await trx('w_wallets').where({ id: wallet.id }).update({
+    await trx("w_wallets").where({ id: wallet.id }).update({
       balance: after,
       updated_at: trx.fn.now(),
     });
 
-    await trx('w_transactions').insert({
+    await trx("w_transactions").insert({
       wallet_id: wallet.id,
       user_id: payout.user_id,
       type: TransactionType.CREDIT,
@@ -399,15 +403,15 @@ export const refundFailedPayout = async (payout: any) => {
       status: TxnStatus.SUCCESS,
     });
 
-    await trx('w_audit_logs').insert({
+    await trx("w_audit_logs").insert({
       user_id: payout.user_id,
-      action: 'PAYOUT_FAILED_REFUND',
-      entity_type: 'payout',
+      action: "PAYOUT_FAILED_REFUND",
+      entity_type: "payout",
       entity_id: payout.id,
       meta: JSON.stringify({ amount: refund }),
     });
 
-    logger.info('Payout failed, wallet refunded', {
+    logger.info("Payout failed, wallet refunded", {
       payoutId: payout.id,
       refund,
     });
@@ -420,26 +424,23 @@ export const refundFailedPayout = async (payout: any) => {
 
 export const listPayouts = async (userId: string, page = 1, limit = 20) => {
   const offset = (page - 1) * limit;
-  const rows = await walletDb('w_payouts')
+  const rows = await walletDb("w_payouts")
     .where({ user_id: userId })
-    .orderBy('created_at', 'desc')
+    .orderBy("created_at", "desc")
     .limit(limit)
     .offset(offset);
 
-  const [{ total }] = await walletDb('w_payouts')
+  const [{ total }] = await walletDb("w_payouts")
     .where({ user_id: userId })
-    .count('id as total');
+    .count("id as total");
 
   return { payouts: rows, pagination: { page, limit, total: Number(total) } };
 };
 
-export const getPayoutDetails = async (
-  userId: string,
-  payoutId: string,
-) => {
-  const payout = await walletDb('w_payouts')
+export const getPayoutDetails = async (userId: string, payoutId: string) => {
+  const payout = await walletDb("w_payouts")
     .where({ id: payoutId, user_id: userId })
     .first();
-  if (!payout) throw new NotFoundError('Payout not found');
+  if (!payout) throw new NotFoundError("Payout not found");
   return payout;
 };
