@@ -180,10 +180,10 @@ export const processSuccessfulPayin = async (
       updated_at: trx.fn.now(),
     });
 
-    /* Credit each ancestor's wallet + ledger entry */
+    /* Credit each ancestor's COMMISSION wallet + ledger entry */
     for (const comm of commissions) {
       const wallet = await trx("w_wallets")
-        .where({ user_id: comm.toUserId })
+        .where({ user_id: comm.toUserId, type: "commission" })
         .first();
       if (!wallet) continue;
 
@@ -217,9 +217,9 @@ export const processSuccessfulPayin = async (
       });
     }
 
-    /* Credit the payer's own wallet with the net amount */
+    /* Credit the payer's MAIN wallet with the net amount */
     const payerWallet = await trx("w_wallets")
-      .where({ user_id: user.id })
+      .where({ user_id: user.id, type: "main" })
       .first();
     if (payerWallet) {
       const pBefore = Number(payerWallet.balance);

@@ -1,6 +1,7 @@
 /** POST /api/wallet/payouts/request */
 export interface RequestPayoutBody {
   amount: number;
+  walletType?: "main" | "commission";
   bankAccountNumber?: string;
   ifscCode?: string;
   accountHolderName?: string;

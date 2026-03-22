@@ -25,10 +25,16 @@ export const getDashboard = async () => {
     .groupBy("w_roles.name", "w_roles.level")
     .orderBy("w_roles.level");
 
-  /* Total wallet balance across all users */
+  /* Total wallet balances across all users (split by type) */
   const [{ total_balance }] = await walletDb("w_wallets").sum(
     "balance as total_balance",
   );
+  const [{ total_main_balance }] = await walletDb("w_wallets")
+    .where({ type: "main" })
+    .sum("balance as total_main_balance");
+  const [{ total_commission_balance }] = await walletDb("w_wallets")
+    .where({ type: "commission" })
+    .sum("balance as total_commission_balance");
 
   /* Total payin volume (successful only) */
   const [{ total_payin }] = await walletDb("w_payins")
@@ -66,6 +72,8 @@ export const getDashboard = async () => {
     activeUsers: Number(activeUsers || 0),
     usersByRole,
     totalBalance: Number(total_balance || 0),
+    totalMainBalance: Number(total_main_balance || 0),
+    totalCommissionBalance: Number(total_commission_balance || 0),
     totalPayinVolume: Number(total_payin || 0),
     totalPayoutAmount: Number(total_payout || 0),
     totalCommissions: Number(total_commission || 0),
@@ -88,7 +96,16 @@ export const listUsers = async (query: AdminListQuery) => {
 
   let q = walletDb("w_users")
     .leftJoin("w_roles", "w_users.role_id", "w_roles.id")
-    .leftJoin("w_wallets", "w_users.id", "w_wallets.user_id")
+    .leftJoin(
+      walletDb.raw(
+        "wallet.w_wallets AS mw ON mw.user_id = w_users.id AND mw.type = 'main'",
+      ),
+    )
+    .leftJoin(
+      walletDb.raw(
+        "wallet.w_wallets AS cw ON cw.user_id = w_users.id AND cw.type = 'commission'",
+      ),
+    )
     .leftJoin("w_users as parent", "w_users.parent_id", "parent.id")
     .select(
       "w_users.id",
@@ -101,7 +118,11 @@ export const listUsers = async (query: AdminListQuery) => {
       "w_users.created_at",
       "w_roles.name as role_name",
       "w_roles.level as role_level",
-      "w_wallets.balance",
+      walletDb.raw("COALESCE(mw.balance, 0) as main_balance"),
+      walletDb.raw("COALESCE(cw.balance, 0) as commission_balance"),
+      walletDb.raw(
+        "COALESCE(mw.balance, 0) + COALESCE(cw.balance, 0) as balance",
+      ),
       walletDb.raw(
         "CONCAT(parent.first_name, ' ', parent.last_name) as parent_name",
       ),
@@ -247,6 +268,10 @@ export const listPayouts = async (query: AdminListQuery) => {
   if (query.status) {
     q = q.where("w_payouts.status", query.status);
     countQ = countQ.where("status", query.status);
+  }
+  if (query.walletType) {
+    q = q.where("w_payouts.wallet_type", query.walletType);
+    countQ = countQ.where("wallet_type", query.walletType);
   }
 
   const rows = await q

@@ -9,4 +9,5 @@ export interface AdminListQuery {
   search?: string;
   fromDate?: string;
   toDate?: string;
+  walletType?: string;
 }

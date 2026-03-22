@@ -147,13 +147,26 @@ export const deleteOverride = async (
   return { message: "Override removed — default config will apply" };
 };
 
-/** Get commission earnings for a user (paginated) */
+/** Get commission earnings for a user (paginated, enriched with payin data) */
 export const getEarnings = async (userId: string, page = 1, limit = 50) => {
   const offset = (page - 1) * limit;
 
-  const rows = await walletDb("w_commission_ledger")
-    .where({ to_user_id: userId })
-    .orderBy("created_at", "desc")
+  const rows = await walletDb("w_commission_ledger as cl")
+    .leftJoin("w_payins as p", "cl.payin_id", "p.id")
+    .leftJoin("w_users as u", "cl.from_user_id", "u.id")
+    .where({ "cl.to_user_id": userId })
+    .select(
+      "cl.id",
+      "cl.payin_id",
+      "cl.from_user_id",
+      "cl.amount as commission_amount",
+      "cl.percentage",
+      "cl.created_at",
+      "p.amount as payin_amount",
+      "u.first_name as from_first_name",
+      "u.last_name as from_last_name",
+    )
+    .orderBy("cl.created_at", "desc")
     .limit(limit)
     .offset(offset);
 
@@ -161,7 +174,15 @@ export const getEarnings = async (userId: string, page = 1, limit = 50) => {
     .where({ to_user_id: userId })
     .count("id as total");
 
-  return { earnings: rows, pagination: { page, limit, total: Number(total) } };
+  const [{ totalEarned }] = await walletDb("w_commission_ledger")
+    .where({ to_user_id: userId })
+    .sum("amount as totalEarned");
+
+  return {
+    earnings: rows,
+    totalEarned: Number(totalEarned || 0),
+    pagination: { page, limit, total: Number(total) },
+  };
 };
 
 /* ------------------------------------------------------------------ */

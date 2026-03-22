@@ -2,12 +2,12 @@
  * Payout routes — mounted at /api/wallet/payouts
  */
 import Router from "koa-router";
-import { walletAuth } from "../wallet-middleware";
+import { walletAuth, adminOnly } from "../wallet-middleware";
 import * as payoutService from "./payout.service";
 
 const router = new Router({ prefix: "/api/wallet/payouts" });
 
-/** POST /request — submit a withdrawal request */
+/** POST /request — submit a withdrawal (body.walletType = 'main' | 'commission') */
 router.post("/request", walletAuth, async (ctx: any) => {
   ctx.body = await payoutService.requestPayout(
     ctx.state.walletUser.userId,
@@ -46,8 +46,8 @@ router.get("/:id", walletAuth, async (ctx: any) => {
   ctx.status = 200;
 });
 
-/** PUT /:id/approve — approve and trigger SLPE payout */
-router.put("/:id/approve", walletAuth, async (ctx: any) => {
+/** PUT /:id/approve — admin-only: approve commission payout and trigger SLPE */
+router.put("/:id/approve", walletAuth, adminOnly, async (ctx: any) => {
   ctx.body = await payoutService.approvePayout(
     ctx.state.walletUser.userId,
     ctx.params.id,
@@ -55,8 +55,8 @@ router.put("/:id/approve", walletAuth, async (ctx: any) => {
   ctx.status = 200;
 });
 
-/** PUT /:id/reject — reject with reason */
-router.put("/:id/reject", walletAuth, async (ctx: any) => {
+/** PUT /:id/reject — admin-only: reject commission payout and refund */
+router.put("/:id/reject", walletAuth, adminOnly, async (ctx: any) => {
   ctx.body = await payoutService.rejectPayout(
     ctx.state.walletUser.userId,
     ctx.params.id,

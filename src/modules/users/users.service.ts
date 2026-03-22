@@ -21,7 +21,9 @@ import type {
   UpdateLimitsBody,
 } from "./users.types";
 
-const FRONTEND_URL = process.env.FRONTEND_URL || "https://wallet-frontend-61566002034.europe-west1.run.app";
+const FRONTEND_URL =
+  process.env.FRONTEND_URL ||
+  "https://wallet-frontend-61566002034.europe-west1.run.app";
 /** Invitation links expire after 72 hours */
 const INVITE_EXPIRY_HOURS = 72;
 
@@ -236,8 +238,11 @@ export const registerUser = async (body: RegisterBody) => {
       })
       .returning("*");
 
-    /* Create wallet with zero balance */
-    await trx("w_wallets").insert({ user_id: user.id, balance: 0 });
+    /* Create main + commission wallets with zero balance */
+    await trx("w_wallets").insert([
+      { user_id: user.id, balance: 0, type: "main" },
+      { user_id: user.id, balance: 0, type: "commission" },
+    ]);
 
     /* Mark invitation as accepted */
     await trx("w_invitations")

@@ -1,12 +1,11 @@
 /**
- * Payout service — SLPE integration with bank validation and polling.
+ * Payout service — dual-wallet SLPE integration.
  *
- * Flow:
- *   1. User requests a withdrawal (balance + daily-limit check)
- *   2. Admin approves → validate bank via SLPE → debit wallet → create SLPE payout
- *   3. Poller checks payout status every 30 s for 10 min
- *   4. On completion → mark as completed
- *   5. On failure  → mark as failed, refund wallet
+ * Two withdrawal flows:
+ *   MAIN wallet    → instant payout (no approval), debit + SLPE call immediately.
+ *   COMMISSION wallet → request (hold) → admin approval → SLPE payout.
+ *
+ * All wallet debits use SELECT ... FOR UPDATE to prevent race conditions.
  */
 import walletDb from "../../database/wallet-db";
 import {
@@ -19,6 +18,7 @@ import {
   ReferenceType,
   TxnStatus,
   PayoutStatus,
+  WalletType,
 } from "../../wallet-types";
 import { slpe } from "../slpe/slpe.service";
 import type { RequestPayoutBody, RejectPayoutBody } from "./payout.types";
@@ -27,9 +27,127 @@ import { normalizePhoneForSlpe } from "../../utils/phone-normalize";
 
 const POLL_DURATION_MS = 10 * 60 * 1000;
 
-/* ------------------------------------------------------------------ */
-/*  REQUEST PAYOUT                                                     */
-/* ------------------------------------------------------------------ */
+/* ================================================================== */
+/*  SHARED HELPERS                                                     */
+/* ================================================================== */
+
+/**
+ * Debit a wallet inside a transaction, using FOR UPDATE to prevent
+ * concurrent requests from reading the same balance (rage-click guard).
+ */
+async function debitWallet(
+  trx: any,
+  userId: string,
+  walletType: WalletType,
+  amount: number,
+  payoutId: string,
+  description: string,
+) {
+  const wallet = await trx("w_wallets")
+    .where({ user_id: userId, type: walletType })
+    .forUpdate()
+    .first();
+
+  if (!wallet) throw new NotFoundError(`${walletType} wallet not found`);
+
+  if (Number(wallet.balance) < amount) {
+    throw new UnprocessableError(
+      `Insufficient ${walletType} balance: ₹${wallet.balance} available, ₹${amount} requested`,
+    );
+  }
+
+  const before = Number(wallet.balance);
+  const after = Math.round((before - amount) * 100) / 100;
+
+  await trx("w_wallets").where({ id: wallet.id }).update({
+    balance: after,
+    updated_at: trx.fn.now(),
+  });
+
+  await trx("w_transactions").insert({
+    wallet_id: wallet.id,
+    user_id: userId,
+    type: TransactionType.DEBIT,
+    amount,
+    balance_before: before,
+    balance_after: after,
+    description,
+    reference_id: payoutId,
+    reference_type: ReferenceType.PAYOUT,
+    status: TxnStatus.SUCCESS,
+  });
+
+  return { walletId: wallet.id, before, after };
+}
+
+/** Refund a wallet (credit back). */
+async function refundWallet(
+  trx: any,
+  userId: string,
+  walletType: WalletType,
+  amount: number,
+  payoutId: string,
+  description: string,
+) {
+  const wallet = await trx("w_wallets")
+    .where({ user_id: userId, type: walletType })
+    .forUpdate()
+    .first();
+  if (!wallet) return;
+
+  const before = Number(wallet.balance);
+  const after = Math.round((before + amount) * 100) / 100;
+
+  await trx("w_wallets").where({ id: wallet.id }).update({
+    balance: after,
+    updated_at: trx.fn.now(),
+  });
+
+  await trx("w_transactions").insert({
+    wallet_id: wallet.id,
+    user_id: userId,
+    type: TransactionType.CREDIT,
+    amount,
+    balance_before: before,
+    balance_after: after,
+    description,
+    reference_id: payoutId,
+    reference_type: ReferenceType.PAYOUT,
+    status: TxnStatus.SUCCESS,
+  });
+}
+
+/** Build SLPE payout payload and submit. */
+async function submitSlpePayout(payout: any, user: any) {
+  const phoneForSlpe = normalizePhoneForSlpe(user.mobile_number, "Mobile number");
+  const bankName = payout.ifsc_code?.substring(0, 4) || "Bank";
+
+  await slpe.validateBankAccount({
+    account_number: payout.bank_account_number,
+    ifsc_code: payout.ifsc_code,
+    name: payout.account_holder_name,
+    phone: phoneForSlpe,
+  });
+
+  const slpePayout = await slpe.createPayout({
+    amount: Number(payout.amount),
+    mode: "IMPS",
+    call_back_url: slpe.getPayoutCallbackUrl(),
+    gateway_id: slpe.getPayoutGatewayId(),
+    bank_account: {
+      name: payout.account_holder_name,
+      ifsc: payout.ifsc_code,
+      bank_name: bankName,
+      account_number: payout.bank_account_number,
+    },
+  });
+
+  return slpePayout;
+}
+
+/* ================================================================== */
+/*  REQUEST PAYOUT (entry point for both wallet types)                 */
+/* ================================================================== */
 
 export const requestPayout = async (
   userId: string,
@@ -38,19 +156,15 @@ export const requestPayout = async (
   if (!body.amount || body.amount <= 0)
     throw new BadRequestError("Amount must be positive");
 
+  const walletType = (body.walletType || "commission") as WalletType;
+  if (walletType !== WalletType.MAIN && walletType !== WalletType.COMMISSION) {
+    throw new BadRequestError("walletType must be 'main' or 'commission'");
+  }
+
   const user = await walletDb("w_users").where({ id: userId }).first();
   if (!user) throw new NotFoundError("User not found");
 
-  const wallet = await walletDb("w_wallets").where({ user_id: userId }).first();
-  if (!wallet) throw new NotFoundError("Wallet not found");
-
-  if (Number(wallet.balance) < body.amount) {
-    throw new UnprocessableError(
-      `Insufficient balance: ₹${wallet.balance} available, ₹${body.amount} requested`,
-    );
-  }
-
-  /* Daily withdraw limit */
+  /* Daily withdraw limit (applies to both wallet types) */
   if (Number(user.withdraw_daily_limit) > 0) {
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
@@ -75,31 +189,158 @@ export const requestPayout = async (
     }
   }
 
-  const [payout] = await walletDb("w_payouts")
-    .insert({
-      user_id: userId,
-      amount: body.amount,
-      bank_account_number: body.bankAccountNumber || user.bank_account_number,
-      ifsc_code: body.ifscCode || user.ifsc_code,
-      account_holder_name:
-        body.accountHolderName || `${user.first_name} ${user.last_name}`,
-      status: PayoutStatus.PENDING,
-    })
-    .returning("*");
-
-  await walletDb("w_audit_logs").insert({
-    user_id: userId,
-    action: "PAYOUT_REQUESTED",
-    entity_type: "payout",
-    entity_id: payout.id,
-    meta: JSON.stringify({ amount: body.amount }),
-  });
-
-  return { message: "Withdrawal request submitted", payoutId: payout.id };
+  if (walletType === WalletType.MAIN) {
+    return requestMainPayout(userId, user, body);
+  }
+  return requestCommissionPayout(userId, user, body);
 };
 
 /* ------------------------------------------------------------------ */
-/*  APPROVE PAYOUT (bank validation → debit → SLPE payout)            */
+/*  MAIN WALLET PAYOUT — instant, no approval                         */
+/* ------------------------------------------------------------------ */
+
+async function requestMainPayout(
+  userId: string,
+  user: any,
+  body: RequestPayoutBody,
+) {
+  let payout: any;
+
+  /* Atomic: debit main wallet + create payout record */
+  await walletDb.transaction(async (trx) => {
+    [payout] = await trx("w_payouts")
+      .insert({
+        user_id: userId,
+        amount: body.amount,
+        bank_account_number: body.bankAccountNumber || user.bank_account_number,
+        ifsc_code: body.ifscCode || user.ifsc_code,
+        account_holder_name:
+          body.accountHolderName || `${user.first_name} ${user.last_name}`,
+        status: PayoutStatus.PROCESSING,
+        wallet_type: WalletType.MAIN,
+      })
+      .returning("*");
+
+    await debitWallet(
+      trx,
+      userId,
+      WalletType.MAIN,
+      body.amount,
+      payout.id,
+      `Withdrawal from main wallet (payout ${payout.id})`,
+    );
+
+    await trx("w_audit_logs").insert({
+      user_id: userId,
+      action: "PAYOUT_MAIN_INSTANT",
+      entity_type: "payout",
+      entity_id: payout.id,
+      meta: JSON.stringify({ amount: body.amount }),
+    });
+  });
+
+  /* Submit to SLPE outside the DB transaction (don't hold locks during HTTP) */
+  let slpePayout;
+  try {
+    slpePayout = await submitSlpePayout(payout, user);
+  } catch (err: any) {
+    logger.error("SLPE main payout failed, refunding", {
+      payoutId: payout.id,
+      error: err.message,
+    });
+
+    await walletDb.transaction(async (trx) => {
+      await refundWallet(
+        trx,
+        userId,
+        WalletType.MAIN,
+        Number(payout.amount),
+        payout.id,
+        `Main payout gateway error — auto-refund (${payout.id})`,
+      );
+      await trx("w_payouts").where({ id: payout.id }).update({
+        status: PayoutStatus.FAILED,
+        gateway_response: JSON.stringify({ error: err.message }),
+        updated_at: trx.fn.now(),
+      });
+    });
+
+    throw new UnprocessableError(
+      `Payout gateway error: ${err.message}. Wallet has been refunded.`,
+    );
+  }
+
+  const pollUntil = new Date(Date.now() + POLL_DURATION_MS);
+  await walletDb("w_payouts").where({ id: payout.id }).update({
+    gateway: "slpe",
+    gateway_txn_id: slpePayout.payout_id,
+    gateway_response: JSON.stringify(slpePayout),
+    bank_validated: true,
+    poll_until: pollUntil,
+    updated_at: walletDb.fn.now(),
+  });
+
+  logger.info("Main wallet payout submitted (instant)", {
+    payoutId: payout.id,
+    slpePayoutId: slpePayout.payout_id,
+  });
+
+  return {
+    message: "Withdrawal submitted to gateway (instant)",
+    payoutId: payout.id,
+    slpePayoutId: slpePayout.payout_id,
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/*  COMMISSION WALLET PAYOUT — hold on request, admin approval needed  */
+/* ------------------------------------------------------------------ */
+
+async function requestCommissionPayout(
+  userId: string,
+  user: any,
+  body: RequestPayoutBody,
+) {
+  let payout: any;
+
+  /* Atomic: debit (hold) commission wallet + create pending payout */
+  await walletDb.transaction(async (trx) => {
+    [payout] = await trx("w_payouts")
+      .insert({
+        user_id: userId,
+        amount: body.amount,
+        bank_account_number: body.bankAccountNumber || user.bank_account_number,
+        ifsc_code: body.ifscCode || user.ifsc_code,
+        account_holder_name:
+          body.accountHolderName || `${user.first_name} ${user.last_name}`,
+        status: PayoutStatus.PENDING,
+        wallet_type: WalletType.COMMISSION,
+      })
+      .returning("*");
+
+    await debitWallet(
+      trx,
+      userId,
+      WalletType.COMMISSION,
+      body.amount,
+      payout.id,
+      `Commission withdrawal hold (payout ${payout.id})`,
+    );
+
+    await trx("w_audit_logs").insert({
+      user_id: userId,
+      action: "PAYOUT_REQUESTED",
+      entity_type: "payout",
+      entity_id: payout.id,
+      meta: JSON.stringify({ amount: body.amount, walletType: "commission" }),
+    });
+  });
+
+  return { message: "Withdrawal request submitted (pending approval)", payoutId: payout.id };
+}
+
+/* ------------------------------------------------------------------ */
+/*  APPROVE COMMISSION PAYOUT — admin triggers SLPE                    */
 /* ------------------------------------------------------------------ */
 
 export const approvePayout = async (approverId: string, payoutId: string) => {
@@ -110,156 +351,62 @@ export const approvePayout = async (approverId: string, payoutId: string) => {
       `Cannot approve a payout in '${payout.status}' status`,
     );
   }
+  if (payout.wallet_type !== WalletType.COMMISSION) {
+    throw new BadRequestError("Only commission wallet payouts require approval");
+  }
 
   const user = await walletDb("w_users").where({ id: payout.user_id }).first();
   if (!user) throw new NotFoundError("User not found");
 
-  const phoneForSlpe = normalizePhoneForSlpe(
-    user.mobile_number,
-    "Mobile number",
-  );
-
-  /* ---------- Step 1: Validate bank account via SLPE ---------- */
-  let bankValidation;
-  try {
-    bankValidation = await slpe.validateBankAccount({
-      account_number: payout.bank_account_number,
-      ifsc_code: payout.ifsc_code,
-      name: payout.account_holder_name,
-      phone: phoneForSlpe,
-    });
-  } catch (err: any) {
-    logger.error("Bank validation failed", {
-      payoutId,
-      error: err.message,
-    });
-    throw new UnprocessableError(
-      `Bank account validation failed: ${err.message}`,
-    );
-  }
-
-  /* ---------- Step 2: Debit wallet inside a transaction ---------- */
-  await walletDb.transaction(async (trx) => {
-    const wallet = await trx("w_wallets")
-      .where({ user_id: payout.user_id })
-      .first();
-    if (!wallet) throw new NotFoundError("Wallet not found");
-
-    if (Number(wallet.balance) < Number(payout.amount)) {
-      throw new UnprocessableError("User no longer has sufficient balance");
-    }
-
-    const before = Number(wallet.balance);
-    const after = Math.round((before - Number(payout.amount)) * 100) / 100;
-
-    await trx("w_wallets").where({ id: wallet.id }).update({
-      balance: after,
-      updated_at: trx.fn.now(),
-    });
-
-    await trx("w_transactions").insert({
-      wallet_id: wallet.id,
-      user_id: payout.user_id,
-      type: TransactionType.DEBIT,
-      amount: payout.amount,
-      balance_before: before,
-      balance_after: after,
-      description: `Withdrawal approved (payout ${payoutId})`,
-      reference_id: payoutId,
-      reference_type: ReferenceType.PAYOUT,
-      status: TxnStatus.SUCCESS,
-    });
-
-    await trx("w_payouts")
-      .where({ id: payoutId })
-      .update({
-        status: PayoutStatus.APPROVED,
-        approved_by: approverId,
-        bank_validated: true,
-        bank_validation_response: JSON.stringify(bankValidation),
-        updated_at: trx.fn.now(),
-      });
+  /* Mark as approved before SLPE call */
+  await walletDb("w_payouts").where({ id: payoutId }).update({
+    status: PayoutStatus.APPROVED,
+    approved_by: approverId,
+    updated_at: walletDb.fn.now(),
   });
 
-  /* ---------- Step 3: Create SLPE payout ---------- */
-  const bankName = payout.ifsc_code?.substring(0, 4) || "Bank";
-
+  /* Submit to SLPE */
   let slpePayout;
   try {
-    slpePayout = await slpe.createPayout({
-      amount: Number(payout.amount),
-      mode: "IMPS",
-      call_back_url: slpe.getPayoutCallbackUrl(),
-      gateway_id: slpe.getPayoutGatewayId(),
-      bank_account: {
-        name: payout.account_holder_name,
-        ifsc: payout.ifsc_code,
-        bank_name: bankName,
-        account_number: payout.bank_account_number,
-      },
-    });
+    slpePayout = await submitSlpePayout(payout, user);
   } catch (err: any) {
-    logger.error("SLPE payout creation failed, refunding wallet", {
+    logger.error("SLPE commission payout failed, refunding", {
       payoutId,
       error: err.message,
     });
 
-    /* Refund the wallet since SLPE call failed */
+    /* Refund commission wallet since SLPE failed */
     await walletDb.transaction(async (trx) => {
-      const wallet = await trx("w_wallets")
-        .where({ user_id: payout.user_id })
-        .first();
-      if (!wallet) return;
-
-      const before = Number(wallet.balance);
-      const refund = Number(payout.amount);
-      const after = Math.round((before + refund) * 100) / 100;
-
-      await trx("w_wallets").where({ id: wallet.id }).update({
-        balance: after,
+      await refundWallet(
+        trx,
+        payout.user_id,
+        WalletType.COMMISSION,
+        Number(payout.amount),
+        payoutId,
+        `Commission payout gateway error — auto-refund (${payoutId})`,
+      );
+      await trx("w_payouts").where({ id: payoutId }).update({
+        status: PayoutStatus.FAILED,
+        gateway_response: JSON.stringify({ error: err.message }),
         updated_at: trx.fn.now(),
       });
-
-      await trx("w_transactions").insert({
-        wallet_id: wallet.id,
-        user_id: payout.user_id,
-        type: TransactionType.CREDIT,
-        amount: refund,
-        balance_before: before,
-        balance_after: after,
-        description: `Payout gateway error — auto-refund (${payoutId})`,
-        reference_id: payoutId,
-        reference_type: ReferenceType.PAYOUT,
-        status: TxnStatus.SUCCESS,
-      });
-
-      await trx("w_payouts")
-        .where({ id: payoutId })
-        .update({
-          status: PayoutStatus.FAILED,
-          gateway_response: JSON.stringify({ error: err.message }),
-          updated_at: trx.fn.now(),
-        });
     });
 
     throw new UnprocessableError(
-      `Payout gateway error: ${err.message}. Wallet has been refunded.`,
+      `Payout gateway error: ${err.message}. Commission wallet has been refunded.`,
     );
   }
 
-  /* ---------- Step 4: Update payout → processing, start polling ---------- */
   const pollUntil = new Date(Date.now() + POLL_DURATION_MS);
-
-  await walletDb("w_payouts")
-    .where({ id: payoutId })
-    .update({
-      status: PayoutStatus.PROCESSING,
-      gateway: "slpe",
-      gateway_txn_id: slpePayout.payout_id,
-      gateway_response: JSON.stringify(slpePayout),
-      poll_until: pollUntil,
-      updated_at: walletDb.fn.now(),
-    });
+  await walletDb("w_payouts").where({ id: payoutId }).update({
+    status: PayoutStatus.PROCESSING,
+    gateway: "slpe",
+    gateway_txn_id: slpePayout.payout_id,
+    gateway_response: JSON.stringify(slpePayout),
+    bank_validated: true,
+    poll_until: pollUntil,
+    updated_at: walletDb.fn.now(),
+  });
 
   await walletDb("w_audit_logs").insert({
     user_id: approverId,
@@ -272,7 +419,7 @@ export const approvePayout = async (approverId: string, payoutId: string) => {
     }),
   });
 
-  logger.info("Payout approved and submitted", {
+  logger.info("Commission payout approved and submitted", {
     payoutId,
     slpePayoutId: slpePayout.payout_id,
   });
@@ -285,7 +432,7 @@ export const approvePayout = async (approverId: string, payoutId: string) => {
 };
 
 /* ------------------------------------------------------------------ */
-/*  REJECT PAYOUT                                                      */
+/*  REJECT COMMISSION PAYOUT — refund the held balance                 */
 /* ------------------------------------------------------------------ */
 
 export const rejectPayout = async (
@@ -303,22 +450,34 @@ export const rejectPayout = async (
     );
   }
 
-  await walletDb("w_payouts").where({ id: payoutId }).update({
-    status: PayoutStatus.REJECTED,
-    approved_by: rejecterId,
-    rejection_reason: body.reason,
-    updated_at: walletDb.fn.now(),
+  /* Refund the held commission balance */
+  await walletDb.transaction(async (trx) => {
+    await refundWallet(
+      trx,
+      payout.user_id,
+      WalletType.COMMISSION,
+      Number(payout.amount),
+      payoutId,
+      `Commission payout rejected — refunded (${payoutId})`,
+    );
+
+    await trx("w_payouts").where({ id: payoutId }).update({
+      status: PayoutStatus.REJECTED,
+      approved_by: rejecterId,
+      rejection_reason: body.reason,
+      updated_at: trx.fn.now(),
+    });
+
+    await trx("w_audit_logs").insert({
+      user_id: rejecterId,
+      action: "PAYOUT_REJECTED",
+      entity_type: "payout",
+      entity_id: payoutId,
+      meta: JSON.stringify({ reason: body.reason }),
+    });
   });
 
-  await walletDb("w_audit_logs").insert({
-    user_id: rejecterId,
-    action: "PAYOUT_REJECTED",
-    entity_type: "payout",
-    entity_id: payoutId,
-    meta: JSON.stringify({ reason: body.reason }),
-  });
-
-  return { message: "Payout rejected", payoutId };
+  return { message: "Payout rejected, commission wallet refunded", payoutId };
 };
 
 /* ------------------------------------------------------------------ */
@@ -337,7 +496,6 @@ export const handleSlpePayoutWebhook = async (payload: any) => {
   if (!payout || payout.status === PayoutStatus.COMPLETED)
     return { status: "ignored" };
 
-  /* Re-verify via SLPE API */
   const statusRes = await slpe.getPayoutStatus(payoutIdFromGw);
   await walletDb("w_payouts")
     .where({ id: payout.id })
@@ -370,50 +528,35 @@ export const handleSlpePayoutWebhook = async (payload: any) => {
 /* ------------------------------------------------------------------ */
 
 export const refundFailedPayout = async (payout: any) => {
+  const wType = (payout.wallet_type || "commission") as WalletType;
+
   return walletDb.transaction(async (trx) => {
     await trx("w_payouts").where({ id: payout.id }).update({
       status: PayoutStatus.FAILED,
       updated_at: trx.fn.now(),
     });
 
-    const wallet = await trx("w_wallets")
-      .where({ user_id: payout.user_id })
-      .first();
-    if (!wallet) return;
-
-    const before = Number(wallet.balance);
-    const refund = Number(payout.amount);
-    const after = Math.round((before + refund) * 100) / 100;
-
-    await trx("w_wallets").where({ id: wallet.id }).update({
-      balance: after,
-      updated_at: trx.fn.now(),
-    });
-
-    await trx("w_transactions").insert({
-      wallet_id: wallet.id,
-      user_id: payout.user_id,
-      type: TransactionType.CREDIT,
-      amount: refund,
-      balance_before: before,
-      balance_after: after,
-      description: `Payout failed — auto-refund (${payout.id})`,
-      reference_id: payout.id,
-      reference_type: ReferenceType.PAYOUT,
-      status: TxnStatus.SUCCESS,
-    });
+    await refundWallet(
+      trx,
+      payout.user_id,
+      wType,
+      Number(payout.amount),
+      payout.id,
+      `Payout failed — auto-refund (${payout.id})`,
+    );
 
     await trx("w_audit_logs").insert({
       user_id: payout.user_id,
       action: "PAYOUT_FAILED_REFUND",
       entity_type: "payout",
       entity_id: payout.id,
-      meta: JSON.stringify({ amount: refund }),
+      meta: JSON.stringify({ amount: Number(payout.amount), walletType: wType }),
     });
 
     logger.info("Payout failed, wallet refunded", {
       payoutId: payout.id,
-      refund,
+      walletType: wType,
+      refund: Number(payout.amount),
     });
   });
 };

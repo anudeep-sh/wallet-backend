@@ -57,6 +57,12 @@ export enum InviteStatus {
   EXPIRED = "expired",
 }
 
+/** Which wallet a balance / payout belongs to */
+export enum WalletType {
+  MAIN = "main",
+  COMMISSION = "commission",
+}
+
 /** Payout-specific statuses (superset of TxnStatus) */
 export enum PayoutStatus {
   PENDING = "pending",
@@ -127,6 +133,7 @@ export interface Wallet {
   id: string;
   user_id: string;
   balance: number;
+  type: WalletType;
   created_at: Date;
   updated_at: Date;
 }
